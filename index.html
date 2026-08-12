@@ -75,6 +75,9 @@
         .edit-hint { font-size:11px; color:#6b46c1; background:#f3f0ff; border:1px solid #ddd6fe; border-radius:6px; padding:7px 9px; margin-top:6px; display:none; }
         .edit-hint.active { display:block; }
         .ri-edited-tag { font-size:10px; color:#7c3aed; background:#f3f0ff; border-radius:8px; padding:1px 6px; margin-left:6px; }
+        .leg-carrier-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+        .leg-carrier-tag { font-size:10px; font-weight:600; border-radius:8px; padding:2px 7px; white-space:nowrap; transition:opacity .15s; }
+        .leg-carrier-tag:hover { opacity:.85; }
         .service-item { background:#f0fdfa; border:1px solid #ccfbf1; border-radius:6px; padding:9px 10px; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
         .filter-box { background:#f7fafd; border:1px solid #dde8f0; border-radius:8px; padding:10px; margin-top:8px; }
         .filter-count-badge { background:#0d9488; color:white; font-size:10px; font-weight:700; border-radius:9px; padding:1px 6px; min-width:14px; text-align:center; }
@@ -222,7 +225,8 @@
     <div class="legend">
       <b>Legenda</b>
       <div class="legend-item"><div class="leg-dot" style="background:#22c55e"></div> Porto selecionado</div>
-      <div class="legend-item"><div class="leg-line" style="background:#2f7fc1"></div> Rota marítima <span style="color:#1a5a8a">➜</span></div>
+      <div class="legend-item"><div class="leg-line" style="background:#2f7fc1"></div> Northbound e Eastbound</div>
+      <div class="legend-item"><div class="leg-line" style="background:#dc2626"></div> Southbound e Westbound</div>
     </div>
   </div>
 </div>
@@ -854,7 +858,7 @@ function buildLegLayers(from,to,controlPts,dist,opts={}) {
     routeLines.push(dot);
   });
 
-  return {controlLine,displayLine:line,decorator,from,to,dist,via:opts.via||[],edited:!!opts.edited,smoothPoints:smooth,color:opts.color||'blue'};
+  return {controlLine,displayLine:line,decorator,from,to,dist,via:opts.via||[],edited:!!opts.edited,smoothPoints:smooth,color:opts.color||'blue',inactiveCarriers:opts.inactiveCarriers||[]};
 }
 
 function drawFullRoute() {
@@ -991,16 +995,36 @@ function updateRouteInfoPanel(legs,totalDist) {
   const legHTML=legs.map((leg,i)=>{
     if(leg.error) return `<div class="ri-leg" style="color:#c0392b">⚠️ ${leg.from} → ${leg.to}: rota não encontrada</div>`;
     if(leg.from===leg.to) return '';
-    const editedTag=leg.edited?`<span class="ri-edited-tag">editado</span>`:'';
     const legDays=formatDays(daysForDistance(leg.dist,AVG_SPEED_KNOTS)+PORT_DWELL_DAYS);
     const dotColor=leg.color==='red'?'#dc2626':'#2f7fc1';
     const colorDot=IS_ADMIN?`<span onclick="toggleLegColorByIndex(${i})" title="Clique para trocar a cor (azul/vermelho)" style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${dotColor};margin-right:6px;cursor:pointer;vertical-align:middle;border:2px solid #fff;box-shadow:0 0 0 1px #ccc"></span>`:'';
-    return `<div class="ri-leg"><div style="flex:1;display:flex;align-items:center">${colorDot}<div><div><strong>${i+1}.</strong> ${leg.from} → ${leg.to}${editedTag}</div></div></div><div style="text-align:right"><div class="ri-dist">${Math.round(leg.dist).toLocaleString()} km</div><div class="ri-days">${legDays}</div></div></div>`;
+    const carrierTags=(currentMeta.carriers||[]).map(c=>{
+      const isActive=!(leg.inactiveCarriers||[]).includes(c);
+      const style=isActive?'background:#e0f2fe;color:#075985':'background:#f1f5f9;color:#94a3b8;text-decoration:line-through;opacity:.7';
+      const click=IS_ADMIN?` onclick="toggleLegCarrier(${i},'${escJs(c)}')" style="cursor:pointer;${style}" title="Clique para ativar/desativar este armador neste trecho"`:` style="${style}"`;
+      return `<span class="leg-carrier-tag"${click}>${c}</span>`;
+    }).join('');
+    const carrierRow=carrierTags?`<div class="leg-carrier-tags">${carrierTags}</div>`:'';
+    return `<div class="ri-leg"><div style="flex:1;display:flex;align-items:center">${colorDot}<div><div><strong>${i+1}.</strong> ${leg.from} → ${leg.to}</div>${carrierRow}</div></div><div style="text-align:right"><div class="ri-dist">${Math.round(leg.dist).toLocaleString()} km</div><div class="ri-days">${legDays}</div></div></div>`;
   }).join('');
   // Estadia em porto conta uma vez por porto intermediário/destino visitado
   // (não no porto de origem, onde o navio já parte carregado).
   const totalDays=daysForDistance(totalDist,AVG_SPEED_KNOTS)+PORT_DWELL_DAYS*portLegs.length;
   el.innerHTML=`<div class="route-info-panel">${serviceMetaCardHTML()}<div class="ri-title">📋 Detalhes da Rota</div>${legHTML}<div class="ri-total">Total: ${Math.round(totalDist).toLocaleString()} km</div><div class="ri-total-days">⏱️ ${formatDays(totalDays)} (navegação + ${PORT_DWELL_DAYS}d/porto)</div></div>`;
+}
+
+// Ativa/desativa um armador específico para um trecho específico —
+// alguns armadores de um serviço compartilhado não operam todos os
+// trechos, então isso fica marcado por trecho, não pelo serviço todo.
+function toggleLegCarrier(idx, carrierName) {
+  if(!IS_ADMIN) return;
+  const legObj=legLayers[idx];
+  if(!legObj) return;
+  if(!legObj.inactiveCarriers) legObj.inactiveCarriers=[];
+  const pos=legObj.inactiveCarriers.indexOf(carrierName);
+  if(pos>=0) legObj.inactiveCarriers.splice(pos,1);
+  else legObj.inactiveCarriers.push(carrierName);
+  recomputeTotals();
 }
 
 function clearAll() {
@@ -1193,7 +1217,8 @@ function serializeCurrentRoute() {
     return {
       from:l.from, to:l.to, dist:l.dist,
       controlPoints:l.controlLine.getLatLngs().map(ll=>[ll.lat,ll.lng]),
-      via:l.via||[], edited:!!l.edited, color:l.color||'blue'
+      via:l.via||[], edited:!!l.edited, color:l.color||'blue',
+      inactiveCarriers:l.inactiveCarriers||[]
     };
   });
 }
@@ -1325,35 +1350,68 @@ function toggleFilterBox() {
 // direcionado mais direto que vai do porto de origem até o de destino
 // (respeita a ORDEM — importante pra serviços de ida e volta, onde o
 // mesmo par de portos pode aparecer nos dois sentidos).
+// Encontra, dentro da sequência de portos de um serviço, o trecho
+// direcionado mais direto que vai do porto de origem até o de destino.
+// Serviços de ida-e-volta fecham um CICLO (o último porto é igual ao
+// primeiro) — nesse caso, a busca também considera dar a volta pelo
+// fim da rota e continuar do início, porque na prática o navio repete
+// o ciclo continuamente. Sem isso, buscar um trecho que só existe "na
+// volta" (ex: Itajaí->Houston, quando Houston vem ANTES de Itajaí na
+// lista) não encontrava nada.
 function findRouteSegment(service, originPort, destPort) {
   const ports=service.ports||[];
+  const n=ports.length;
+  if(n<2) return null;
+  const isCyclic=ports[0]===ports[n-1];
   let best=null;
-  for(let i=0;i<ports.length;i++){
+
+  for(let i=0;i<n;i++){
     if(ports[i]!==originPort) continue;
-    for(let j=i+1;j<ports.length;j++){
+    // adiante, sem dar a volta
+    for(let j=i+1;j<n;j++){
       if(ports[j]!==destPort) continue;
       const gap=j-i;
-      if(!best||gap<best.gap) best={originIdx:i,destIdx:j,gap};
+      if(!best||gap<best.gap) best={originIdx:i,destIdx:j,gap,wraps:false};
+      break;
+    }
+    // adiante, dando a volta pelo fim (só se a rota fecha um ciclo)
+    if(isCyclic){
+      for(let j=0;j<i;j++){
+        if(ports[j]!==destPort) continue;
+        const gap=(n-1-i)+j;   // até o fim (mesmo porto do início, custo 0) + do início até j
+        if(!best||gap<best.gap) best={originIdx:i,destIdx:j,gap,wraps:true};
+        break;
+      }
     }
   }
   return best;
 }
 
+// Pega os trechos (legs) envolvidos num segmento, mesmo quando ele dá
+// a volta pelo fim do ciclo.
+function getSegmentLegs(service, seg) {
+  const legs=service.legs||[];
+  if(!seg.wraps) return legs.slice(seg.originIdx,seg.destIdx);
+  const n=service.ports.length;
+  return legs.slice(seg.originIdx,n-1).concat(legs.slice(0,seg.destIdx));
+}
+
 // Transit Time só do trecho origem→destino (não da rota inteira) —
 // soma a navegação dos trechos envolvidos + estadia em cada parada
 // intermediária no meio do caminho (sem contar a chegada final).
-function computeSegmentStats(service, originIdx, destIdx) {
-  let sailDist=0;
-  for(let k=originIdx;k<destIdx;k++) sailDist+=(service.legs[k]&&service.legs[k].dist)||0;
+function computeSegmentStats(service, seg) {
+  const segLegs=getSegmentLegs(service,seg);
+  const sailDist=segLegs.reduce((s,l)=>s+((l&&l.dist)||0),0);
   const sailDays=daysForDistance(sailDist,AVG_SPEED_KNOTS);
-  const intermediateStops=destIdx-originIdx-1;
+  const intermediateStops=seg.gap-1;
   return { sailDist, intermediateStops, transitDays: sailDays+PORT_DWELL_DAYS*intermediateStops };
 }
 
-function renderServiceItemHTML(s, extraLinesHTML) {
+function renderServiceItemHTML(s, extraLinesHTML, carriersOverride) {
   const date=new Date(s.updatedAt||s.createdAt).toLocaleDateString('pt-BR');
   const isCurrent=s.id===currentServiceId;
-  const carriersLine=s.carriers?.length?`<small class="service-carriers">🚢 ${s.carriers.join(', ')}</small>`:'';
+  const carriersToShow=carriersOverride!==undefined?carriersOverride:(s.carriers||[]);
+  const carriersLine=carriersToShow.length?`<small class="service-carriers">🚢 ${carriersToShow.join(', ')}</small>`:'';
   const adminButtons=`<button class="btn-small admin-only" style="display:${IS_ADMIN?'':'none'}" onclick="editService('${s.id}')" title="Carregar para editar">✏️ Editar</button>
       <button class="btn-small danger admin-only" style="display:${IS_ADMIN?'':'none'}" onclick="deleteService('${s.id}')" title="Excluir">✕</button>`;
   const defaultLine=`<small>${s.ports.length} portos · ${Math.round(s.totalDist).toLocaleString()} km · ${s.updatedAt?'atualizado ':''}${date}</small>`;
@@ -1371,15 +1429,28 @@ function renderServiceItemHTML(s, extraLinesHTML) {
   </div>`;
 }
 
+// Armadores que realmente atendem um trecho específico — só conta quem
+// está ativo em TODOS os legs envolvidos (senão não dá pra oferecer o
+// transporte porta-a-porta daquele segmento inteiro).
+function segmentCarriers(service, seg) {
+  const segLegs=getSegmentLegs(service,seg);
+  return (service.carriers||[]).filter(c=>segLegs.every(l=>!(l.inactiveCarriers||[]).includes(c)));
+}
+
 // Resultado da busca por rota — mostra só os serviços que realmente
 // operam de originPort até destPort (na ordem certa), com o Transit
-// Time daquele trecho específico, do mais rápido pro mais lento.
+// Time daquele trecho específico, do mais rápido pro mais lento. Se um
+// filtro de armador estiver ativo, só entra quem realmente opera TODO
+// o trecho buscado — não basta constar na lista geral do serviço.
 function renderRouteSearchResults(services, originPort, destPort) {
   const el=document.getElementById('servicesList');
   const matches=[];
   services.forEach(s=>{
     const seg=findRouteSegment(s,originPort,destPort);
-    if(seg) matches.push({service:s, seg, stats:computeSegmentStats(s,seg.originIdx,seg.destIdx)});
+    if(!seg) return;
+    const availableCarriers=segmentCarriers(s,seg);
+    if(filterSelected.carrier.size && !availableCarriers.some(c=>filterSelected.carrier.has(c))) return;
+    matches.push({service:s, seg, stats:computeSegmentStats(s,seg), availableCarriers});
   });
 
   if(!matches.length){
@@ -1388,11 +1459,12 @@ function renderRouteSearchResults(services, originPort, destPort) {
   }
   matches.sort((a,b)=>a.stats.transitDays-b.stats.transitDays);
 
-  const items=matches.map(({service:s,seg,stats})=>{
-    const viaCount=seg.destIdx-seg.originIdx-1;
+  const items=matches.map(({service:s,seg,stats,availableCarriers})=>{
+    const viaCount=stats.intermediateStops;
     const viaText=viaCount>0?` · ${viaCount} escala${viaCount>1?'s':''} no meio`:' · direto';
-    const extra=`<small>${originPort} → ${destPort}${viaText} · ${Math.round(stats.sailDist).toLocaleString()} km</small><small class="route-transit-time">⏱️ Transit Time: ${formatDays(stats.transitDays)}</small>`;
-    return renderServiceItemHTML(s,extra);
+    const wrapTag=seg.wraps?' <span class="ri-edited-tag" style="color:#7c3aed;background:#f3f0ff">via volta do ciclo</span>':'';
+    const extra=`<small>${originPort} → ${destPort}${viaText} · ${Math.round(stats.sailDist).toLocaleString()} km${wrapTag}</small><small class="route-transit-time">⏱️ Transit Time: ${formatDays(stats.transitDays)}</small>`;
+    return renderServiceItemHTML(s,extra,availableCarriers);
   }).join('');
 
   el.innerHTML=`<div class="section-label" style="margin-top:0">🔎 ${originPort} → ${destPort} <span class="badge">${matches.length}</span></div>${items}`;
@@ -1418,19 +1490,22 @@ async function renderServicesList() {
 
   if(!allServices.length){ el.innerHTML='<div class="empty-state">Nenhum serviço salvo ainda</div>'; return; }
 
-  // Trade/Armador sempre filtram primeiro (múltipla seleção, "OU" entre si)
+  // Trade sempre filtra primeiro. Armador também filtra aqui, EXCETO
+  // quando origem+destino estão definidos — nesse caso a checagem de
+  // armador é mais precisa (feita por trecho) dentro da busca de rota.
+  const originPort=[...filterSelected.origin][0];
+  const destPort=[...filterSelected.destination][0];
+  const isRouteSearch=!!(originPort && destPort);
+
   let services=allServices.filter(s=>{
     if(filterSelected.trade.size && !filterSelected.trade.has(s.trade||'')) return false;
-    if(filterSelected.carrier.size && !(s.carriers||[]).some(c=>filterSelected.carrier.has(c))) return false;
+    if(!isRouteSearch && filterSelected.carrier.size && !(s.carriers||[]).some(c=>filterSelected.carrier.has(c))) return false;
     return true;
   });
 
-  const originPort=[...filterSelected.origin][0];
-  const destPort=[...filterSelected.destination][0];
-
   // Origem E destino definidos ao mesmo tempo -> vira uma busca de rota
   // específica, com Transit Time — em vez da lista agrupada por trade.
-  if(originPort && destPort){
+  if(isRouteSearch){
     renderRouteSearchResults(services, originPort, destPort);
     return;
   }
@@ -1472,7 +1547,7 @@ function renderServiceOnMap(service) {
   service.legs.forEach(leg=>{
     if(!leg.controlPoints){ legLayers.push({from:leg.from,to:leg.to,dist:leg.dist||0,error:leg.error}); return; }
     const idx=legLayers.length;
-    legLayers.push(buildLegLayers(leg.from,leg.to,leg.controlPoints,leg.dist,{via:leg.via,edited:leg.edited,color:leg.color||'blue'}));
+    legLayers.push(buildLegLayers(leg.from,leg.to,leg.controlPoints,leg.dist,{via:leg.via,edited:leg.edited,color:leg.color||'blue',inactiveCarriers:leg.inactiveCarriers||[]}));
     attachLegContextMenu(legLayers[idx],idx);
   });
 }
